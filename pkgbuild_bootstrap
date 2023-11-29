@@ -21,10 +21,10 @@ cleanup() {
 }
 
 ARCH=$(uname -m)
-CONFDEST="${PWD}/makepkg.d/makepkg.$ARCH.conf"
+CONFDEST="${PWD}/utils/makepkg.d/makepkg.$ARCH.conf"
 
 TMPCONF="makepkg_current.conf"
-cat "${PWD}/makepkg.d/makepkg.base.conf" > "$TMPCONF"
+cat "${PWD}/utils/makepkg.d/makepkg.base.conf" > "$TMPCONF"
 cat "$CONFDEST" >> "$TMPCONF"
 
 FLAGS=""
