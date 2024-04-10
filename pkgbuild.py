@@ -559,7 +559,7 @@ if __name__ == "__main__":
             check_build_target(args_),
             args_.build_target,
             args_.fail_fast,
-            args_.disable_auto_remove,
+            not args_.disable_auto_remove,
             args_.dry_run,
         )
     )
