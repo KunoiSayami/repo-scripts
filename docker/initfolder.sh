@@ -4,6 +4,8 @@ if [ -f /home/build/repos/.placehold ]; then
   rm /home/build/repos/.placehold
 fi
 
+git config --global init.defaultBranch master
+
 find /home/build/repos -maxdepth 0 -empty -exec rm -rf {} \;
 
 if [ -d /home/build/repos ]; then
