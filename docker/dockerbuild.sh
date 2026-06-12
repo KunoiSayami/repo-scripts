@@ -5,6 +5,8 @@ sudo pacman -Sy
 
 cd /home/build
 
+git config --global init.defaultBranch master
+
 if [ -f ./hook-run.sh ]; then
    . ./hook-run.sh
 fi
