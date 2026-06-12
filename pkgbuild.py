@@ -192,7 +192,7 @@ async def parse_srcinfo(path: pathlib.PurePath) -> PackageVersionWithPath:
         p = await asyncio.create_subprocess_exec(
             "makepkg", "--printsrcinfo", cwd=src_path.parent, stdout=subprocess.PIPE
         )
-        (stdout, stderr) = await p.communicate()
+        stdout, stderr = await p.communicate()
         info = get_src_info(stdout.decode())
         spend_time = time.time() - start_time
     return PackageVersionWithPath(info, pathlib.Path(path).resolve(), spend_time)
@@ -326,8 +326,10 @@ async def run_build(
     )
     p = await asyncio.create_subprocess_exec(
         "makechrootpkg",
-        "-r", chroot_dir,
-        "-M", makepkg_conf,
+        "-r",
+        chroot_dir,
+        "-D",
+        f"{makepkg_conf}:/etc/makepkg.conf",
         "-c",
         "--",
         *signing_arg,
@@ -360,15 +362,19 @@ async def install_dependency_via_yay(dependency: str) -> int:
 
 async def run_build_dep(tmp_pkg_dest: str) -> int:
     env = os.environ.copy()
-    env.update({
-        "SRCPKGDEST": BUILD_ENVS.src_dest,
-        "SRCDEST": BUILD_ENVS.src_dest,
-        "PKGDEST": tmp_pkg_dest,
-    })
+    env.update(
+        {
+            "SRCPKGDEST": BUILD_ENVS.src_dest,
+            "SRCDEST": BUILD_ENVS.src_dest,
+            "PKGDEST": tmp_pkg_dest,
+        }
+    )
     p = await asyncio.create_subprocess_exec(
         "makechrootpkg",
-        "-r", BUILD_ENVS.chroot_dir,
-        "-M", BUILD_ENVS.makepkg_conf,
+        "-r",
+        BUILD_ENVS.chroot_dir,
+        "-D",
+        f"{BUILD_ENVS.makepkg_conf}:/etc/makepkg.conf",
         "-c",
         "--",
         "--asdeps",
@@ -385,8 +391,10 @@ async def run_build_dep(tmp_pkg_dest: str) -> int:
 async def install_pkg_into_chroot(pkg_path: str) -> int:
     p = await asyncio.create_subprocess_exec(
         "makechrootpkg",
-        "-r", BUILD_ENVS.chroot_dir,
-        "-I", pkg_path,
+        "-r",
+        BUILD_ENVS.chroot_dir,
+        "-I",
+        pkg_path,
         stdout=None,
     )
     await p.wait()
