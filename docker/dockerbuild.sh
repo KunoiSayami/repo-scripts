@@ -7,8 +7,6 @@ cd /home/build
 
 git config --global init.defaultBranch master
 
-sed -i 's/unshare --user/true/' /usr/bin/makechrootpkg
-
 if [ -f ./hook-run.sh ]; then
    . ./hook-run.sh
 fi

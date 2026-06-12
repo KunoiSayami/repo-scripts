@@ -11,3 +11,5 @@ find /home/build/repos -maxdepth 0 -empty -exec rm -rf {} \;
 if [ -d /home/build/repos ]; then
   chown -R build:build /home/build/repos
 fi
+
+sed -i 's/unshare --user/true/' /usr/bin/makechrootpkg
