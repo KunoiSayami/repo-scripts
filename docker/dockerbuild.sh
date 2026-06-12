@@ -8,8 +8,8 @@ cd /home/build
 git config --global init.defaultBranch master
 
 sudo sed -i 's/unshare --user/true/' /usr/bin/makechrootpkg
-sudo sed -i 's/unshare --fork --pid gpg/gpg/g' /usr/bin/arch-nspawn
-sudo sed -i 's/unshare --mount pacstrap/pacstrap/g' /usr/bin/mkarchroot
+sudo sed -i 's/unshare --mount pacstrap/pacstrap/' /usr/bin/mkarchroot
+sudo sed -i 's/unshare --fork --pid gpg/gpg/' /usr/bin/arch-nspawn
 
 if [ -f ./hook-run.sh ]; then
    . ./hook-run.sh
