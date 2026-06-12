@@ -22,13 +22,24 @@ fi
 
 export DOCKER_SETUP_SCRIPT=1
 
+CHROOT_DIR="${CHROOT_DIR:-/var/lib/archbuild/extra-x86_64}"
 
 if [ $UID -eq 0 ]; then
     chown -R build:build repos
 
     echo "$TARGET_HOSTS" | base64 -d >> /etc/hosts
+
+    if [ ! -d "$CHROOT_DIR/root" ]; then
+        mkdir -p "$CHROOT_DIR"
+        mkarchroot "$CHROOT_DIR/root" base-devel
+    fi
 else
     echo "$TARGET_HOSTS" | base64 -d | sudo tee -a /etc/hosts >/dev/null
+
+    if [ ! -d "$CHROOT_DIR/root" ]; then
+        sudo mkdir -p "$CHROOT_DIR"
+        sudo mkarchroot "$CHROOT_DIR/root" base-devel
+    fi
 fi
 
 pushd repos

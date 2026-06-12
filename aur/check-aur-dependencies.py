@@ -30,7 +30,18 @@ import aiohttp
 async def check_pkg(session: aiohttp.ClientSession, num: int, pkg: str) -> tuple[int, bool]:
     logging.info(f'Checking {pkg}')
     ret = await session.head(f'https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h={pkg}')
-    return num, ret.status == 200
+    if ret.status != 200:
+        return num, False
+    proc = await asyncio.create_subprocess_exec(
+        'pacman', '-Si', pkg,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+    if proc.returncode == 0:
+        logging.info(f'{pkg} exists in official repos, skipping')
+        return num, False
+    return num, True
 
 
 async def main() -> int:

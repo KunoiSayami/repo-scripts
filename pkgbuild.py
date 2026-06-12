@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import time
 
+import tempfile
+
 import aiofiles
 
 logger = logging.getLogger()
@@ -23,6 +25,7 @@ CI_COMMIT_BRANCH = os.getenv("CI_COMMIT_BRANCH", "")
 CI_DEFAULT_BRANCH = os.getenv("CI_DEFAULT_BRANCH", "")
 CI_COMMIT_TITLE = os.getenv("CI_COMMIT_TITLE", "")
 BUILD_OVERRIDE = os.getenv("BUILD_OVERRIDE", "")
+CHROOT_DIR = os.getenv("CHROOT_DIR", "/var/lib/archbuild/extra-x86_64")
 TRUST_GPG_SCRIPT = pathlib.Path("./utils/trust_gpg.sh").resolve()
 NO_UPLOAD = os.getenv("BUILD_NO_UPLOAD") is None
 FAIL_REPOS = []
@@ -136,6 +139,7 @@ class BuildEnvs:
     src_dest: str
     pkg_dest: str
     makepkg_conf: str
+    chroot_dir: str
     signing_arg: list[str]
 
     def __init__(self):
@@ -143,6 +147,7 @@ class BuildEnvs:
         self.pkg_dest = str(cwd.joinpath("packages", ARCH).resolve())
         self.src_dest = str(cwd.joinpath("build").resolve())
         self.makepkg_conf = str(cwd.joinpath("makepkg_current.conf").resolve())
+        self.chroot_dir = CHROOT_DIR
         if CI_COMMIT_BRANCH == CI_DEFAULT_BRANCH and CI_COMMIT_BRANCH != "":
             self.signing_arg = ["--sign"]
         else:
@@ -153,6 +158,7 @@ class BuildEnvs:
             "src_dest": self.src_dest,
             "pkg_dest": self.pkg_dest,
             "makepkg_conf": self.makepkg_conf,
+            "chroot_dir": self.chroot_dir,
             "signing_arg": self.signing_arg,
         }
 
@@ -270,19 +276,15 @@ async def run_hook(origin_path: pathlib.Path, target: str) -> None:
 
 
 async def run_build_with_install(
-    src_dest: str, pkg_dest: str, makepkg_conf: str, signing_arg: list[str]
-) -> int:
-    return await run_build(src_dest, pkg_dest, makepkg_conf, signing_arg, "-i")
-
-
-async def run_build(
     src_dest: str,
     pkg_dest: str,
     makepkg_conf: str,
+    chroot_dir: str,
     signing_arg: list[str],
-    *other_args: str,
 ) -> int:
-    env = os.environ
+    # Dependencies need to be installed into the host for subsequent builds,
+    # so use plain makepkg -i rather than makechrootpkg.
+    env = os.environ.copy()
     env.update(
         {
             "SRCPKGDEST": src_dest,
@@ -294,8 +296,40 @@ async def run_build(
     p = await asyncio.create_subprocess_exec(
         "makepkg",
         "--clean",
-        "-s",
-        *other_args,
+        "-si",
+        *signing_arg,
+        "--asdeps",
+        "--noconfirm",
+        "--needed",
+        "--noprogressbar",
+        env=env,
+        stdout=None,
+    )
+    await p.wait()
+    return p.returncode
+
+
+async def run_build(
+    src_dest: str,
+    pkg_dest: str,
+    makepkg_conf: str,
+    chroot_dir: str,
+    signing_arg: list[str],
+) -> int:
+    env = os.environ.copy()
+    env.update(
+        {
+            "SRCPKGDEST": src_dest,
+            "SRCDEST": src_dest,
+            "PKGDEST": pkg_dest,
+        }
+    )
+    p = await asyncio.create_subprocess_exec(
+        "makechrootpkg",
+        "-r", chroot_dir,
+        "-M", makepkg_conf,
+        "-c",
+        "--",
         *signing_arg,
         "--asdeps",
         "--noconfirm",
@@ -324,13 +358,61 @@ async def install_dependency_via_yay(dependency: str) -> int:
     return p.returncode
 
 
-async def build_yay_dependency(target: PackageVersionWithPath, dependency: str) -> int:
-    if (dep_dir := target.path.parent.joinpath(dependency).resolve()).is_dir():
-        os.chdir(str(dep_dir))
-        await run_hook(target.path, dependency)
-        return await run_build_with_install(**BUILD_ENVS.get_dict())
-    else:
+async def run_build_dep(tmp_pkg_dest: str) -> int:
+    env = os.environ.copy()
+    env.update({
+        "SRCPKGDEST": BUILD_ENVS.src_dest,
+        "SRCDEST": BUILD_ENVS.src_dest,
+        "PKGDEST": tmp_pkg_dest,
+    })
+    p = await asyncio.create_subprocess_exec(
+        "makechrootpkg",
+        "-r", BUILD_ENVS.chroot_dir,
+        "-M", BUILD_ENVS.makepkg_conf,
+        "-c",
+        "--",
+        "--asdeps",
+        "--noconfirm",
+        "--needed",
+        "--noprogressbar",
+        env=env,
+        stdout=None,
+    )
+    await p.wait()
+    return p.returncode
+
+
+async def install_pkg_into_chroot(pkg_path: str) -> int:
+    p = await asyncio.create_subprocess_exec(
+        "makechrootpkg",
+        "-r", BUILD_ENVS.chroot_dir,
+        "-I", pkg_path,
+        stdout=None,
+    )
+    await p.wait()
+    return p.returncode
+
+
+async def build_dep_into_chroot(target: PackageVersionWithPath, dependency: str) -> int:
+    dep_dir = target.path.parent.joinpath(dependency).resolve()
+    if not dep_dir.is_dir():
         return await install_dependency_via_yay(dependency)
+
+    with tempfile.TemporaryDirectory() as tmp_dest:
+        os.chdir(str(dep_dir))
+        await run_hook(dep_dir, dependency)
+        ret = await run_build_dep(tmp_dest)
+        if ret != 0:
+            return ret
+        pkg_files = list(pathlib.Path(tmp_dest).glob("*.pkg.tar.zst"))
+        if not pkg_files:
+            logger.error("No .pkg.tar.zst found after building dep %s", dependency)
+            return 1
+        for pkg_file in pkg_files:
+            ret = await install_pkg_into_chroot(str(pkg_file))
+            if ret != 0:
+                return ret
+    return 0
 
 
 async def do_build(target: PackageVersionWithPath) -> int:
@@ -353,7 +435,7 @@ async def do_build(target: PackageVersionWithPath) -> int:
         async with aiofiles.open(str(yay_deps)) as fin:
             while dep := (await fin.readline()).strip():
                 logger.debug("Find dependency %s, build first", dep)
-                if ret := await build_yay_dependency(target, dep):
+                if ret := await build_dep_into_chroot(target, dep):
                     logger.error(
                         "Build dependencies package error, skipped next step (%d)",
                         ret,

@@ -25,7 +25,7 @@ RUN if [ ! -r /home/build/hook.sh ]; then \
 
 RUN pacman --noconfirm --needed -Sy archlinux-keyring
 
-RUN pacman --noconfirm --needed -Su base-devel gnupg git yay
+RUN pacman --noconfirm --needed -Su base-devel gnupg git yay devtools
 
 RUN pacman --noconfirm --needed -S  python python-aiohttp python-aiofiles python-aiohttp-socks moreutils
 
