@@ -322,14 +322,13 @@ async def run_build(
             "SRCPKGDEST": src_dest,
             "SRCDEST": src_dest,
             "PKGDEST": pkg_dest,
+            "MAKEPKG_CONF": makepkg_conf,
         }
     )
     p = await asyncio.create_subprocess_exec(
         "makechrootpkg",
         "-r",
         chroot_dir,
-        "-D",
-        f"{makepkg_conf}:/etc/makepkg.conf",
         "-c",
         "--",
         *signing_arg,
@@ -367,14 +366,13 @@ async def run_build_dep(tmp_pkg_dest: str) -> int:
             "SRCPKGDEST": BUILD_ENVS.src_dest,
             "SRCDEST": BUILD_ENVS.src_dest,
             "PKGDEST": tmp_pkg_dest,
+            "MAKEPKG_CONF": BUILD_ENVS.makepkg_conf,
         }
     )
     p = await asyncio.create_subprocess_exec(
         "makechrootpkg",
         "-r",
         BUILD_ENVS.chroot_dir,
-        "-D",
-        f"{BUILD_ENVS.makepkg_conf}:/etc/makepkg.conf",
         "-c",
         "--",
         "--asdeps",

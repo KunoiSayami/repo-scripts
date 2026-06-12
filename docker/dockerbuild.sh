@@ -40,14 +40,20 @@ if [ $UID -eq 0 ]; then
 
     if [ ! -d "$CHROOT_DIR/root" ]; then
         mkdir -p "$CHROOT_DIR"
-        mkarchroot "$CHROOT_DIR/root" base-devel
+        pacstrap -GMc "$CHROOT_DIR/root" base-devel
+        echo "1" > "$CHROOT_DIR/root/.arch-chroot"
+        printf '%s.UTF-8 UTF-8\n' en_US de_DE > "$CHROOT_DIR/root/etc/locale.gen"
+        echo 'LANG=C.UTF-8' > "$CHROOT_DIR/root/etc/locale.conf"
     fi
 else
     echo "$TARGET_HOSTS" | base64 -d | sudo tee -a /etc/hosts >/dev/null
 
     if [ ! -d "$CHROOT_DIR/root" ]; then
         sudo mkdir -p "$CHROOT_DIR"
-        sudo mkarchroot "$CHROOT_DIR/root" base-devel
+        sudo pacstrap -GMc "$CHROOT_DIR/root" base-devel
+        echo "1" | sudo tee "$CHROOT_DIR/root/.arch-chroot" >/dev/null
+        printf '%s.UTF-8 UTF-8\n' en_US de_DE | sudo tee "$CHROOT_DIR/root/etc/locale.gen" >/dev/null
+        echo 'LANG=C.UTF-8' | sudo tee "$CHROOT_DIR/root/etc/locale.conf" >/dev/null
     fi
 fi
 
