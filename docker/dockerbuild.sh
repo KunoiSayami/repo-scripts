@@ -19,6 +19,9 @@ if [ ! -d repos ]; then
   git checkout "$CHECKOUT_BRANCH"
   git fetch --recurse-submodules -j2
   git submodule update --init
+
+  git submodule set-branch --branch chroot utils
+  git submodule update --remote utils
   popd
 fi
 
