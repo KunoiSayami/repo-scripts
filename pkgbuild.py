@@ -62,6 +62,10 @@ class PackageVersionWithPath:
         return f"{self.pkg_version.__str__()} (spend: {self.spend_time:.2f}s)"
 
 
+def vercmp(a: str, b: str) -> int:
+    return int(subprocess.check_output(["vercmp", a, b]).strip())
+
+
 @dataclasses.dataclass
 class PackageVersion:
     name: str
@@ -69,22 +73,22 @@ class PackageVersion:
     arch_match: bool
 
     def __eq__(self, other: PackageVersion) -> bool:
-        return other.version == self.version
+        return vercmp(self.version, other.version) == 0
 
     def __gt__(self, other: PackageVersion) -> bool:
-        return self.version > other.version
+        return vercmp(self.version, other.version) > 0
 
     def __lt__(self, other: PackageVersion) -> bool:
-        return self.version < other.version
+        return vercmp(self.version, other.version) < 0
 
     def __le__(self, other: PackageVersion) -> bool:
-        return self < other or self == other
+        return vercmp(self.version, other.version) <= 0
 
     def __ge__(self, other: PackageVersion) -> bool:
-        return self > other or self == other
+        return vercmp(self.version, other.version) >= 0
 
     def __ne__(self, other: PackageVersion) -> bool:
-        return not self == other
+        return vercmp(self.version, other.version) != 0
 
     def __str__(self) -> str:
         return f"{self.name} {self.version}"
@@ -244,7 +248,7 @@ async def get_build_target(
         pkg = future.result()
         if pkg.name in repo:
             # print(pkg.name, repo[pkg.name], pkg.version)
-            if repo[pkg.name] < pkg.version:
+            if vercmp(repo[pkg.name], pkg.version) < 0:
                 pending_build.append(pkg)
         else:
             pending_build.append(pkg)
