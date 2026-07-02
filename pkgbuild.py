@@ -108,29 +108,29 @@ class MakepkgErrorReason:
 
 
 def fetch_database(pkg_db: str) -> dict[str, str]:
-    name_read = False
+    base_read = False
     version_read = False
-    pkg_name = ""
+    pkg_base = ""
     package_storage = {}
     with lzma.open(pkg_db) as fin:
         for line in fin:
             line = line.strip()
-            if name_read:
-                pkg_name = line.decode()
-                name_read = False
+            if base_read:
+                pkg_base = line.decode()
+                base_read = False
             elif version_read:
-                package_storage.update({pkg_name: line.decode()})
-                # logger.debug("%s %s", pkg_name, line.decode())
+                package_storage.update({pkg_base: line.decode()})
+                # logger.debug("%s %s", pkg_base, line.decode())
                 version_read = False
-                pkg_name = ""
-            if line == b"%NAME%":
-                assert not name_read
-                name_read = True
+                pkg_base = ""
+            if line == b"%BASE%":
+                assert not base_read
+                base_read = True
             if line == b"%VERSION%":
                 assert not version_read
                 version_read = True
-            assert (name_read is False and version_read is False) or (
-                version_read != name_read
+            assert (base_read is False and version_read is False) or (
+                version_read != base_read
             )
     return package_storage
 
