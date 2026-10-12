@@ -15,13 +15,40 @@ from AURUtils.srcinfo import SRCINFO
 from AURUtils.version import vercmp
 
 
-MAX_WORKERS = 16
+MAX_WORKERS = 6
+MAX_RETRIES = 3
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+TIMEOUT = aiohttp.ClientTimeout(total=60, connect=10)
 
 
 async def check_pkg(session: aiohttp.ClientSession, num: int, pkg: str) -> tuple[int, bool]:
     logging.info(f'Checking {pkg}')
-    ret = await session.head(f'https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h={pkg}')
+    try:
+        ret = await session.head(f'https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h={pkg}')
+    except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+        logging.warning(f'Failed to check {pkg}: {e!r}, treat as not in AUR')
+        return num, False
     return num, ret.status == 200
+
+
+async def fetch_aur_srcinfo(session: aiohttp.ClientSession, pkgbase: str) -> Optional[str]:
+    """Return AUR .SRCINFO content, or None if the package is not registered in AUR."""
+    url = f'https://aur.archlinux.org/cgit/aur.git/plain/.SRCINFO?h={pkgbase}'
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+                if resp.status not in RETRY_STATUSES:
+                    return None
+                error = f'HTTP {resp.status}'
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            error = repr(e)
+        if attempt == MAX_RETRIES:
+            raise RuntimeError(f'Failed to fetch .SRCINFO of {pkgbase} after {MAX_RETRIES} attempts: {error}')
+        delay = 2 ** attempt
+        logging.warning(f'Fetch .SRCINFO of {pkgbase} failed ({error}), retry in {delay}s ({attempt}/{MAX_RETRIES})')
+        await asyncio.sleep(delay)
 
 
 async def check_aur_update(
@@ -54,45 +81,53 @@ async def check_aur_update(
         async with aiofiles.open(srcinfo_file, 'r') as f:
             srcinfo = SRCINFO.parse(await f.read())
     version = srcinfo.get_version()
-    async with session.get(f'https://aur.archlinux.org/cgit/aur.git/plain/.SRCINFO?h={srcinfo.pkgbase}') as resp:
-        if resp.status != 200:
-            logging.info(f'{item.name} not register in AUR')
-            return
-        new_srcinfo = SRCINFO.parse(await resp.text())
-        new_version = new_srcinfo.get_version()
-        result = vercmp(new_version, version)
-        if result == 0:
-            return
-        elif result < 0:
-            logging.warning(f'Warning: {item.name}({version}) is newer than AUR')
+    aur_srcinfo = await fetch_aur_srcinfo(session, srcinfo.pkgbase)
+    if aur_srcinfo is None:
+        logging.info(f'{item.name} not register in AUR')
+        return
+    new_srcinfo = SRCINFO.parse(aur_srcinfo)
+    new_version = new_srcinfo.get_version()
+    result = vercmp(new_version, version)
+    if result == 0:
+        return
+    elif result < 0:
+        logging.warning(f'Warning: {item.name}({version}) is newer than AUR')
+    else:
+        if item.joinpath('.git').exists():
+            if not dry_run:
+                proc = await asyncio.create_subprocess_exec('git', '-C', f'{str(item)}', 'pull', 'origin', 'master')
+                if await proc.wait() != 0:
+                    logging.error(f'git pull failed in {item.name} (exit code {proc.returncode})')
+            logging.info(f'Upgrade {item.name} from {version} to {new_version}')
         else:
-            if item.joinpath('.git').exists():
-                if not dry_run:
-                    await asyncio.create_subprocess_exec('git', '-C', f'{str(item)}', 'pull', 'origin', 'master')
-                logging.info(f'Upgrade {item.name} from {version} to {new_version}')
-            else:
-                logging.info(f'Found update {item.name}({new_version}) (local: {version})')
-            if check_deps:
-                deps = [*new_srcinfo.makedepends, *new_srcinfo.depends]
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(10)) as session:
-                    tasks = [asyncio.create_task(check_pkg(session, n, pkg)) for n, pkg in enumerate(deps)]
-                    yay_dep_nums = []
-                    for task in asyncio.as_completed(tasks):
-                        n, r = await task
-                        if r:
-                            heapq.heappush(yay_dep_nums, n)
+            logging.info(f'Found update {item.name}({new_version}) (local: {version})')
+        if check_deps:
+            deps = [*new_srcinfo.makedepends, *new_srcinfo.depends]
+            async with aiohttp.ClientSession(timeout=TIMEOUT) as dep_session:
+                tasks = [asyncio.create_task(check_pkg(dep_session, n, pkg)) for n, pkg in enumerate(deps)]
+                yay_dep_nums = []
+                for task in asyncio.as_completed(tasks):
+                    n, r = await task
+                    if r:
+                        heapq.heappush(yay_dep_nums, n)
 
-                yaydeps_dir = item.parent.joinpath('.yaydeps')
+            yaydeps_dir = item.parent.joinpath('.yaydeps')
 
-                if len(yay_dep_nums) > 0:
-                    async with aiofiles.open(yaydeps_dir.joinpath(item.stem), 'w', encoding='utf-8') as f:
-                        await f.write(
-                            '\n'.join([*(deps[heapq.heappop(yay_dep_nums)] for _ in range(len(yay_dep_nums))), '']))
+            if len(yay_dep_nums) > 0:
+                async with aiofiles.open(yaydeps_dir.joinpath(item.stem), 'w', encoding='utf-8') as f:
+                    await f.write(
+                        '\n'.join([*(deps[heapq.heappop(yay_dep_nums)] for _ in range(len(yay_dep_nums))), '']))
 
 
-async def with_sem(sem: asyncio.Semaphore, coro: Coroutine):
+async def with_sem(sem: asyncio.Semaphore, name: str, coro: Coroutine) -> bool:
+    """Run coro under the semaphore; a failure is logged and reported as False instead of aborting the run."""
     async with sem:
-        return await coro
+        try:
+            await coro
+        except Exception:
+            logging.exception(f'Failed to check {name}')
+            return False
+    return True
 
 
 async def main() -> int:
@@ -124,9 +159,9 @@ async def main() -> int:
 
     repo_dir = Path(args.repo_dir)
 
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(10)) as session:
+    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         tasks = [asyncio.create_task(
-            with_sem(sem, check_aur_update(
+            with_sem(sem, item.name, check_aur_update(
                 session=session,
                 item=item,
                 dry_run=dry_run,
@@ -134,7 +169,10 @@ async def main() -> int:
                 check_deps=check_deps
         ))
         ) for item in repo_dir.iterdir()]
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
+
+    if (failed := results.count(False)) > 0:
+        logging.error(f'{failed} package(s) failed to check, see warnings above')
 
     return 0
 
